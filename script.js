@@ -1,5 +1,6 @@
 const progress = document.querySelector('#reading-progress');
 const sections = [...document.querySelectorAll('.chapter')];
+const revealElements = [...document.querySelectorAll('.reveal')];
 const links = [...document.querySelectorAll('.toc a')];
 
 function updateProgress() {
@@ -11,13 +12,15 @@ const observer = new IntersectionObserver((entries) => {
   entries.forEach((entry) => {
     if (entry.isIntersecting) {
       entry.target.classList.add('visible');
-      const link = document.querySelector(`.toc a[href="#${entry.target.id}"]`);
-      links.forEach((item) => item.classList.toggle('active', item === link));
+      if (entry.target.id) {
+        const link = document.querySelector(`.toc a[href="#${entry.target.id}"]`);
+        links.forEach((item) => item.classList.toggle('active', item === link));
+      }
     }
   });
 }, { rootMargin: '-18% 0px -68% 0px' });
 
-sections.forEach((section) => observer.observe(section));
+revealElements.forEach((element) => observer.observe(element));
 window.addEventListener('scroll', updateProgress, { passive: true });
 updateProgress();
 
