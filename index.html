@@ -11,20 +11,36 @@
   <div class="noise" aria-hidden="true"></div>
   <div class="progress-track"><span id="reading-progress"></span></div>
 
+  <nav class="site-nav" aria-label="Primary navigation">
+    <a class="brand" href="#top" aria-label="Web Blueprint Heist home">
+      <span class="brand-mark">WB</span>
+      <span>Web Blueprint<br><strong>Heist</strong></span>
+    </a>
+    <div class="nav-links">
+      <a href="#analysis">Analysis</a>
+      <a href="#renderer">Attack surface</a>
+      <a href="#flag">Result</a>
+    </div>
+  </nav>
+
   <header class="masthead">
     <a class="brand" href="#top" aria-label="Web Blueprint Heist home">
       <span class="brand-mark">WB</span>
       <span>Web Blueprint<br><strong>Heist</strong></span>
     </a>
-    <div class="status"><span></span> Case file / complete</div>
+    <div class="status"><span></span> Research blog / case file complete</div>
   </header>
 
   <main id="top">
     <section class="hero reveal">
       <div class="hero-copy">
-        <p class="kicker">Application security / field notes</p>
-        <h1>A blueprint for<br><em>breaking the frame.</em></h1>
+        <p class="kicker">Application security / research notes</p>
+        <h1>Notes on <br><em>breaking the frame.</em></h1>
         <p class="hero-lede">A chained exploit path from weak input validation to a forged admin identity, an internal GraphQL request, and a template-rendered flag.</p>
+        <div class="hero-actions">
+          <a class="hero-button primary" href="#analysis">Read the write-up</a>
+          <a class="hero-button ghost" href="#flag">Jump to result</a>
+        </div>
         <div class="hero-meta">
           <span><b>01</b> target</span>
           <span><b>06</b> stages</span>
@@ -61,7 +77,7 @@
       <article class="writeup">
         <section id="analysis" class="chapter reveal">
           <div class="chapter-head"><span>01</span><p>First signals</p></div>
-          <h2>Two details kept<br><em>the spider sense awake.</em></h2>
+          <h2>Two details kept<br><em>the investigation moving.</em></h2>
           <p>At the beginning of the code analysis, two details triggered my attention. The first was a possible SQL injection in the GraphQL schema. The application calls <code>detectSqli</code>, but a blacklist-style check is not sufficient protection when the input is later interpolated directly into SQL.</p>
           <div class="code-card">
             <div class="code-bar"><span>app/schemas/schema.js</span><button class="copy" data-copy="sql-code">copy</button></div>
